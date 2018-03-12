@@ -21,7 +21,7 @@ use types::{EventLoopRequest, HyperClient, MessageRequest, MessageStatus};
 use utils::MultipartWriter;
 use uuid::Uuid;
 
-const HOST_ADDRESS: &'static str = "https://prod-nginz-https.wire.com";
+const HOST_ADDRESS: &'static str = "https://accounttest.ticktockmessenger.com";
 const MULTIPART_BOUNDARY: &'static str = "frontier";
 lazy_static! {
     static ref MULTIPART_MIXED: Mime = {
