@@ -7,28 +7,33 @@ use serde::{Deserialize, Serialize};
 use serde_json;
 use std::{iter, u16};
 use std::collections::HashMap;
-use std::fs::{self, File};
-use std::io::{BufReader, BufWriter};
-use std::path::PathBuf;
+//use std::fs::{self, File};
+//use std::io::{BufReader, BufWriter};
+//use std::path::PathBuf;
 use types::EncodedPreKey;
 use uuid::Uuid;
+use postgres::{Connection, TlsMode};
+use std::sync::*;
 
 pub struct StorageManager {
-    path: PathBuf,
+    path: String,
     cbox: CBox<FileStore>,
 }
 
 impl StorageManager {
     pub fn new(id: Uuid) -> BerylliumResult<Self> {
-        let mut path = utils::get_store_path();
-        path.push(id.to_string());
-        if !path.is_dir() {
-            info!("Creating {}", path.display());
-            fs::create_dir_all(&path)?;
-        }
+        let path = utils::get_store_path();
+//        path.push(id.to_string());
+//        if !path.is_dir() {
+//            info!("Creating {}", path.display());
+//            fs::create_dir_all(&path)?;
+//        }
+
+        let conn = Connection::connect(path.clone(), TlsMode::None)
+            .unwrap();
 
         Ok(StorageManager {
-            cbox: CBox::file_open(&path)?,
+            cbox: CBox::db_open(id.to_string(),Arc::new(Mutex::new(conn)))?,
             path: path,
         })
     }
@@ -51,18 +56,22 @@ impl StorageManager {
     pub fn save_state<T>(&self, data: &T) -> BerylliumResult<()>
         where T: Serialize
     {
-        let mut fd = File::create(self.path.join("bot_data.json"))
-                          .map(BufWriter::new)?;
-        serde_json::to_writer(&mut fd, data)?;
+
+        self.cbox.save_state(&serde_json::to_vec(data)?)?;
+//        let mut fd = File::create(self.path.join("bot_data.json"))
+//                          .map(BufWriter::new)?;
+//        serde_json::to_writer(&mut fd, data)?;
         Ok(())
     }
 
     pub fn load_state<T>(&self) -> BerylliumResult<T>
         where for<'de> T: Deserialize<'de>
     {
-        let mut fd = File::open(self.path.join("bot_data.json"))
-                          .map(BufReader::new)?;
-        let data = serde_json::from_reader(&mut fd)?;
+//        let mut fd = File::open(self.path.join("bot_data.json"))
+//                          .map(BufReader::new)?;
+//        let data = serde_json::from_reader(&mut fd)?;
+        let data = self.cbox.load_state()?;
+        let data = serde_json::from_slice(&data)?;
         Ok(data)
     }
 

@@ -1,3 +1,4 @@
+#![allow(non_snake_case)]
 use errors::{BerylliumError, BerylliumResult};
 use futures::Future;
 use hyper::Client;
@@ -5,14 +6,16 @@ use hyper::header::ContentType;
 use hyper_rustls::HttpsConnector;
 use image::{self, GenericImage, ImageFormat as ImgFormat};
 use mime::{IMAGE_BMP, IMAGE_GIF};
-use serde::de::{Deserialize, Deserializer, Error as DecodeError};
-use serde_json::Value;
+use serde::de::{self, Visitor, SeqAccess, MapAccess, Deserialize, Deserializer, Error as DecodeError};
+use serde_json::{Value, from_str};
+use serde_json::error::Error as SerdeError;
 use std::borrow::Borrow;
 use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::hash::{Hash, Hasher};
 use std::io::Read;
 use std::path::Path;
+use std::fmt::{self};
 use uuid::Uuid;
 
 // FIXME: Check the types (for example, id should be Uuid instead of String),
@@ -194,6 +197,212 @@ pub struct AssetData {
     pub key: String,
     pub token: String,
 }
+
+// cex types
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+pub enum ResType {
+    VcoinTickerRes {
+        timestamp: String,
+        low: String,
+        high: String,
+        last: String,
+        volume: String,
+        volume30d: String,
+        bid: f64,
+        ask: f64,
+    },
+    Vchart(Vec<Vcoinchartpoint>),
+    Vcandle(CandleData0),
+
+}
+
+
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum ReqType {
+    VcoinTickerReq {
+        lastHours: u32,
+        maxRespArrSize: u32,
+    }
+
+
+}
+
+
+
+#[derive(Debug, Deserialize)]
+pub struct VcoinCandleRes {
+    pub timestamp: String,
+    pub open:f64,
+    pub low: String,
+    pub high: String,
+    pub last: String,
+    pub volume: String,
+    pub volume30d: String,
+    pub bid: f64,
+    pub ask: f64,
+}
+//
+//
+//
+#[derive(Debug, Deserialize)]
+pub struct Vcoinchartpoint{
+    pub tmsp: u64,
+    pub price: String,
+}
+
+
+
+#[derive(Debug)]
+pub struct CandleData0 {
+    time: u32,
+    data1m:Vec<CandleData>,
+    data1h:Vec<CandleData>,
+    data1d:Vec<CandleData>,
+}
+
+
+
+impl CandleData0 {
+    fn new(t: u32, m: &str, h: &str, d: &str) -> Result<Self, SerdeError> {
+        Ok(CandleData0{
+            time:t
+            , data1m: from_str(m)?
+            , data1h: from_str(h)?
+            , data1d: from_str(d)?
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CandleData {
+    ts: u32,
+    o: f64,
+    l: f64,
+    h: f64,
+    c: f64,
+    v: f64
+}
+
+
+
+impl<'de> Deserialize<'de> for CandleData0 {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+        where
+            D: Deserializer<'de>,
+    {
+        enum Field { Time, Data1m, Data1h, Data1d };
+
+        impl<'de> Deserialize<'de> for Field {
+            fn deserialize<D>(deserializer: D) -> Result<Field, D::Error>
+                where
+                    D: Deserializer<'de>,
+            {
+                struct FieldVisitor;
+
+                impl<'de> Visitor<'de> for FieldVisitor {
+                    type Value = Field;
+
+                    fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                        formatter.write_str("`Time` or `Data1m` or `Data1h` or `Data1d`")
+                    }
+
+                    fn visit_str<E>(self, value: &str) -> Result<Field, E>
+                        where
+                            E: de::Error,
+                    {
+                        match value {
+                            "time" => Ok(Field::Time),
+                            "data1m" => Ok(Field::Data1m),
+                            "data1h" => Ok(Field::Data1h),
+                            "data1d" => Ok(Field::Data1d),
+                            _ => Err(de::Error::unknown_field(value, FIELDS)),
+                        }
+                    }
+                }
+
+                deserializer.deserialize_identifier(FieldVisitor)
+            }
+        }
+
+        struct CandleData0Visitor;
+
+        impl<'de> Visitor<'de> for CandleData0Visitor {
+            type Value = CandleData0;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct Duration")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<CandleData0, V::Error>
+                where
+                    V: SeqAccess<'de>,
+            {
+                let time = seq.next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(0, &self))?;
+                let data1m = seq.next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(1, &self))?;
+                let data1h = seq.next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(2, &self))?;
+                let data1d = seq.next_element()?
+                    .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+
+
+                CandleData0::new(time, data1m, data1h, data1d).map_err(de::Error::custom)
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<CandleData0, V::Error>
+                where
+                    V: MapAccess<'de>,
+            {
+                let mut time = None;
+                let mut data1m = None;
+                let mut data1h = None;
+                let mut data1d = None;
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        Field::Time => {
+                            if time.is_some() {
+                                return Err(de::Error::duplicate_field("time"));
+                            }
+                            time = Some(map.next_value()?);
+                        }
+                        Field::Data1m => {
+                            if data1m.is_some() {
+                                return Err(de::Error::duplicate_field("data1m"));
+                            }
+                            data1m = Some(map.next_value()?);
+                        }
+                        Field::Data1h => {
+                            if data1h.is_some() {
+                                return Err(de::Error::duplicate_field("data1h"));
+                            }
+                            data1h = Some(map.next_value()?);
+                        }
+                        Field::Data1d => {
+                            if data1d.is_some() {
+                                return Err(de::Error::duplicate_field("data1d"));
+                            }
+                            data1d = Some(map.next_value()?);
+                        }
+                    }
+                }
+                let time = time.ok_or_else(|| de::Error::missing_field("time"))?;
+                let data1m = data1m.ok_or_else(|| de::Error::missing_field("data1m"))?;
+                let data1h = data1h.ok_or_else(|| de::Error::missing_field("data1h"))?;
+                let data1d = data1d.ok_or_else(|| de::Error::missing_field("data1d"))?;
+                CandleData0::new(time, data1m, data1h, data1d).map_err(de::Error::custom)
+            }
+        }
+
+        const FIELDS: &'static [&'static str] = &["time", "data1m", "data1h","data1d"];
+        deserializer.deserialize_struct("CandleData0", FIELDS, CandleData0Visitor)
+    }
+}
+
+//cex  types end
 
 pub enum MessageStatus {
     Sent,

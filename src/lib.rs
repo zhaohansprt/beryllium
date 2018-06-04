@@ -23,7 +23,7 @@ extern crate tokio_rustls;
 extern crate tokio_proto;
 extern crate uuid;
 extern crate uuid_v1;
-
+extern crate postgres;
 #[macro_use] mod utils;
 mod client;
 mod handlers;
@@ -38,4 +38,4 @@ pub mod errors;
 pub use client::BotClient;
 pub use handlers::Handler;
 pub use service::BotService;
-pub use types::{Event, EventData, Image, ImageFormat};
+pub use types::{Event, EventData, Image, ImageFormat, ReqType};

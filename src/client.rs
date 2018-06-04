@@ -15,13 +15,14 @@ use std::collections::HashMap;
 use std::mem;
 use std::sync::Arc;
 use storage::StorageManager;
-use types::{AssetData, AssetUploadRequest, Image};
-use types::{BerylliumFuture, BotCreationData, Devices, DevicePreKeys};
+use types::{AssetData, AssetUploadRequest, Image, ResType, ReqType};
+use types::{BerylliumFuture, BotCreationData, Devices, DevicePreKeys, EncodedPreKey};
 use types::{EventLoopRequest, HyperClient, MessageRequest, MessageStatus};
 use utils::MultipartWriter;
 use uuid::Uuid;
 
-const HOST_ADDRESS: &'static str = "https://prod-nginz-https.wire.com";
+const HOST_ADDRESS: &'static str = "https://accounttest.pichat.im";
+const CEX_HOST_ADDRESS: &'static str = "https://cex.io/api/";
 const MULTIPART_BOUNDARY: &'static str = "frontier";
 lazy_static! {
     static ref MULTIPART_MIXED: Mime = {
@@ -33,6 +34,8 @@ lazy_static! {
 header! {
     (ContentMd5, "Content-MD5") => [String]     // base64-encoded MD5 hash digest
 }
+
+
 
 /// Private client to isolate some methods.
 #[derive(Clone)]
@@ -49,6 +52,17 @@ impl HttpsClient {
         request.headers_mut().set(Authorization(Bearer {
             token: self.auth_token.to_owned(),
         }));
+
+        request
+    }
+
+    fn prepare_request_for_cex(&self, method: Method, rel_url: &str) -> Request {
+        let url = format!("{}{}", CEX_HOST_ADDRESS, rel_url);
+        info!("{}: {}", method, url);
+        let  request = Request::new(method, url.parse().unwrap());
+//        request.headers_mut().set(Authorization(Bearer {
+//            token: self.auth_token.to_owned(),
+//        }));
 
         request
     }
@@ -87,6 +101,57 @@ impl HttpsClient {
         HttpsClient::request_with_request(client, request)
     }
 
+
+
+    /// Generic request builder for all API requests.
+    fn request_cex<T>(&self, client: &HyperClient, method: Method,
+                  rel_url: &str, data: Option<T>)
+                  -> BerylliumFuture<(StatusCode, Headers, Body)>
+        where T: Serialize
+    {
+        let mut request = self.prepare_request_for_cex(method, rel_url);
+        request.headers_mut().set(ContentType::json());
+
+        if let Some(object) = data {
+            let res = serde_json::to_vec(&object).map(|bytes| {   // FIXME: Error?
+                debug!("Setting JSON payload");
+                request.set_body::<Vec<u8>>(bytes.into());
+            });
+
+            future_try!(res);
+        }
+
+        HttpsClient::request_with_request(client, request)
+    }
+
+
+    fn send_cex_message<T>(&self, client: &HyperClient, method: Method,
+                       rel_url: &str, data: Option<T>)
+                       -> BerylliumFuture<ResType>
+        where T: Serialize
+    {
+        info!("Sending cex req...");
+//        let url = format!("/bot/messages?ignore_missing={}", ignore_missing);
+        let f = self.request_cex(client, method, &rel_url, data);
+        let f = f.and_then(|(code, headers, body)| {
+            utils::acquire_body_with_err(&headers, body).and_then(move |vec| {
+                if code.is_success() {
+                    let res = serde_json::from_slice::<ResType>(&vec)
+                        .map_err(BerylliumError::from);
+
+                    info!("Successfully req the cex api.");
+                    future::result(res)
+                } else {
+                    let res = serde_json::from_slice::<SerdeValue>(&vec)
+                        .map_err(BerylliumError::from);
+                    let msg = format!("Error sending cex req . Response: {:?}", res);
+                    future::err(BerylliumError::Other(msg))
+                }
+            })
+        });
+
+        Box::new(f)
+    }
     /// Send raw message. This is usually called by `send_encrypted_message`
     fn send_message<T>(&self, client: &HyperClient,
                        data: T, ignore_missing: bool)
@@ -318,6 +383,22 @@ pub struct BotData {
 }
 
 impl BotData {
+
+
+    pub fn new(data: BotCreationData) -> BerylliumResult<(BotData, Vec<EncodedPreKey>)> {
+        let storage = StorageManager::new(data.id)?;
+        storage.save_state(&data)?;
+        let prekeys = storage.initialize_prekeys(data.conversation.members.len())?;
+
+        Ok((BotData {
+            storage: Arc::new(storage),
+            client: HttpsClient::from(&data),
+            data: data,
+            devices: Arc::new(Mutex::new(Devices::default())),
+        },prekeys))
+    }
+
+
     pub fn from_storage(bot_id: Uuid) -> BerylliumResult<BotData> {
         let storage = StorageManager::new(bot_id)?;
         let store_data: BotCreationData = storage.load_state()?;
@@ -352,8 +433,42 @@ impl<'a> From<(&'a BotData, &'a FutureSender<EventLoopRequest<()>>)> for BotClie
     }
 }
 
+
+
 impl BotClient {
+
+
     /// Send a user text message to the conversation associated with the bot instance.
+    pub fn send_cex_message(&self, url: String, method: Method, req :Option<ReqType> ) {
+//        let text = text.to_owned();
+        let (client, storage, devices) =
+            (self.inner.clone(), self.storage.clone(), self.devices.clone());
+
+        let call_closure =Box::new( move |c: &HyperClient| {
+//             let req :Option <MessageRequest>=None;
+             let client2=client.clone();
+             let storage2=storage.clone();
+             let devices2=devices.clone();
+             let cloned_c = c.clone();
+//            let (methodfn, reqfn) =
+//                (method.clone(), req.clone());
+            let f= client.send_cex_message(c, method.clone(),&url,req.clone()).and_then(  move |vchart| {
+                    let mut message = GenericMessage::new();
+                    let uuid = utils::uuid_v1();
+                    message.set_message_id(uuid.to_string());
+                    let mut txt = Text::new();
+                    txt.set_content(format!("{:?}",vchart));
+                    message.set_text(txt);
+                    client2.send_encrypted_message(&cloned_c, &message, storage2.clone(), devices2.clone())
+                });
+            Box::new(f) as BerylliumFuture<()>
+            });
+
+            self.event_loop_sender.clone().send(call_closure).wait().map_err(|e| {
+                error!("Cannot queue user message in event loop: {}", e);
+            }).ok();
+        }
+
     pub fn send_message(&self, text: &str) {
         let text = text.to_owned();
         let (client, storage, devices) =
@@ -373,6 +488,29 @@ impl BotClient {
             error!("Cannot queue user message in event loop: {}", e);
         }).ok();
     }
+    /// Send a user text message to the conversation associated with the bot instance.
+//    pub fn send_message(&self, text: &str) {
+//        let text = text.to_owned();
+//        let (client, storage, devices) =
+//            (self.inner.clone(), self.storage.clone(), self.devices.clone());
+//        if some_helper_function(&text) {
+//            let call_closure =Box::new(move |c: &HyperClient| {
+//                client.send_cex_message(c, Method::Get,"/ticker/BTC/USD",None).and_then(|vchart| {
+//                    let mut message = GenericMessage::new();
+//                    let uuid = utils::uuid_v1();
+//                    message.set_message_id(uuid.to_string());
+//                    let mut txt = Text::new();
+//                    txt.set_content(vchart.to_string());
+//                    message.set_text(txt);
+//                    client.send_encrypted_message(c, &message, storage.clone(), devices.clone())
+//                });
+//            });
+//
+//        self.event_loop_sender.clone().send(call_closure).wait().map_err(|e| {
+//            error!("Cannot queue user message in event loop: {}", e);
+//        }).ok()
+//    }
+//    }
 
     /// Send an user image to the associated conversation. Use the exported
     /// `Image` to open an image (from path, reader, or buffer).

@@ -10,7 +10,7 @@ use hyper::server::{Service, Request, Response};
 use messages_proto::GenericMessage;
 use parking_lot::Mutex;
 use serde_json::{self, Value as SerdeValue};
-use storage::StorageManager;
+//use storage::StorageManager;
 use std::collections::HashMap;
 use std::sync::Arc;
 use types::{BotCreationData, BotCreationResponse, Event, EventData};
@@ -115,7 +115,8 @@ impl<H: Handler> Service for BotHandler<H> {
 
         // FIXME: Better way to detect relative URL paths?
         match (split.next(), split.next(), split.next(), split.next()) {
-            (Some("bots"), None, None, None) => parse_json_and!(create_bot),
+            (Some("bots"), None, None, None) =>  {let bot_data = self.bot_data.clone();
+                                                    parse_json_and!(create_bot,bot_data)},
             (Some("bots"), Some(id), Some("messages"), None) => {
                 let pool = self.pool.clone();
                 let handler = self.handler.clone();
@@ -137,14 +138,34 @@ fn empty_response(headers: Headers, data: SerdeValue,
     Ok(())
 }
 
-fn create_bot(data: BotCreationData, resp: &mut Response) -> BerylliumResult<()> {
+fn create_bot(bot_data: Arc<Mutex<HashMap<Uuid, Arc<Mutex<BotData>>>>>,
+              data: BotCreationData, resp: &mut Response)
+             -> BerylliumResult<()>
+{
     info!("Creating new bot instance...");
-    let storage = StorageManager::new(data.id)?;
-    let mut prekeys = storage.initialize_prekeys(data.conversation.members.len())?;
-    // There will always be a final prekey corresponding to u16::MAX
-    let final_key = prekeys.pop().unwrap();
-    storage.save_state(&data)?;
 
+
+//    let storage = StorageManager::new(data.id)?;
+//    let mut prekeys = storage.initialize_prekeys(data.conversation.members.len())?;
+    // There will always be a final prekey corresponding to u16::MAX
+
+//    storage.save_state(&data)?;
+
+//     FIXME:  Does it need to handles the situation that the bot alreadly exist ,therefore removes all the related data to this duplicated bot
+//    let  prekeys = if bot_data.lock().get(data.id).is_none() {
+    let id= data.id.clone();
+    let (this_bot_data, mut prekeys) = BotData::new(data)?;
+    let this_bot_data = Arc::new(Mutex::new(this_bot_data));
+    let  mut bot_data=bot_data.lock();
+    bot_data.insert(id, this_bot_data.clone());
+    bot_data.unlock_fair();
+//        prekeys
+//    } else {
+//        bot_data.lock().get(data.id).unwrap().clone().storage.
+
+//    };
+
+    let final_key = prekeys.pop().unwrap();
     let data = BotCreationResponse {
         prekeys: prekeys,
         last_prekey: final_key,
@@ -170,13 +191,14 @@ fn handle_events<H>(pool: Arc<CpuPool>, job_sender: FutureSender<EventLoopReques
 
     // Maybe this is the first time we're getting events, or we've rebooted
     // our bot and we don't have the creation data in memory.
-    let this_bot_data = if bot_data.lock().get(&bot_id).is_none() {
+    let mut bot_data=bot_data.lock();
+    let this_bot_data = if bot_data.get(&bot_id).is_none() {
         let this_bot_data = BotData::from_storage(bot_id)?;
         let this_bot_data = Arc::new(Mutex::new(this_bot_data));
-        bot_data.lock().insert(bot_id, this_bot_data.clone());
+        bot_data.insert(bot_id, this_bot_data.clone());
         this_bot_data
     } else {
-        bot_data.lock().get(&bot_id).unwrap().clone()
+        bot_data.get(&bot_id).unwrap().clone()
     };
 
     // NOTE: Since we have `Arc<Mutex<BotData>>`, we won't block the
@@ -194,15 +216,16 @@ fn handle_events<H>(pool: Arc<CpuPool>, job_sender: FutureSender<EventLoopReques
             let plain_bytes = storage.decrypt(&data.from, sender, text)?;
             let mut message: GenericMessage = protobuf::parse_from_bytes(&plain_bytes)?;
             info!("Successfully decrypted message!");
-
-            // We can decrypt and decode the message - 200 OK
-            let msg_id = message.get_message_id().to_owned();
-            // Async queue confirmation into event loop.
-            job_sender.clone().send(Box::new(move |c: &HyperClient| {
-                client.send_confirmation(c, &msg_id, storage.clone(), devices.clone())
-            })).wait().map_err(|e| {
-                error!("Cannot queue confirmation message in event loop: {}", e);
-            }).ok();
+            if message.has_confirmation() { info!("Successfully comfirmed message!");}
+            else {
+                       // We can decrypt and decode the message - 200 OK
+                       let msg_id = message.get_message_id().to_owned();
+                        // Async queue confirmation into event loop.
+                        job_sender.clone().send(Box::new(move |c: &HyperClient| {
+                            client.send_confirmation(c, &msg_id, storage.clone(), devices.clone())
+                     })).wait().map_err(|e| {
+                            error!("Cannot queue confirmation message in event loop: {}", e);
+                        }).ok();
 
             if message.has_text() {     // FIXME: Handle other message types
                 info!("Got text message.");
@@ -218,6 +241,7 @@ fn handle_events<H>(pool: Arc<CpuPool>, job_sender: FutureSender<EventLoopReques
                     }
                 });
             }
+        }
         },
 
         (ConversationEventType::MemberJoin,
@@ -260,7 +284,7 @@ fn handle_events<H>(pool: Arc<CpuPool>, job_sender: FutureSender<EventLoopReques
 
             // If our bot has left, then remove the entire data.
             if user_ids.iter().find(|&id| id == &bot_id).is_some() {
-                bot_data.lock().remove(&bot_id).unwrap();
+                bot_data.remove(&bot_id).unwrap();
             }
 
             info!("{} member(s) have left the conversation {}",
@@ -295,6 +319,7 @@ fn handle_events<H>(pool: Arc<CpuPool>, job_sender: FutureSender<EventLoopReques
             return Err(BerylliumError::Unreachable)
         },
     };
+    bot_data.unlock_fair();
 
     if let Some(event_data) = event_occurred {
         let client = {

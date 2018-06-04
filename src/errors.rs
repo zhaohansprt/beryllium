@@ -11,13 +11,14 @@ use std::error::Error;
 use std::fmt::{self, Display};
 use std::io;
 use uuid::ParseError as UuidError;
-
+use postgres::error as PgError;
 pub type BerylliumResult<T> = Result<T, BerylliumError>;
 
 /// Global error which encapsulates all related errors.
 #[derive(Debug)]
 pub enum BerylliumError {
     Io(io::Error),
+    Db(PgError::Error),
     CBox(CBoxError<FileStore>),
     Openssl(ErrorStack),
     Encode(EncodeError),
@@ -38,6 +39,7 @@ impl Display for BerylliumError {
         match *self {
             BerylliumError::CBox(ref e)     => write!(f, "Cryptobox error: {}", e),
             BerylliumError::Io(ref e)       => write!(f, "I/O error: {}", e),
+            BerylliumError::Db(ref e)       => write!(f, "DB error: {}", e),
             BerylliumError::Openssl(ref e)  => write!(f, "Openssl error: {}", e),
             BerylliumError::Encode(ref e)   => write!(f, "Encode error: {}", e),
             BerylliumError::Decode(ref e)   => write!(f, "Decode error: {}", e),
@@ -65,6 +67,7 @@ impl Error for BerylliumError {
             BerylliumError::Openssl(ref e)  => Some(e),
             BerylliumError::Image(ref e)    => Some(e),
             BerylliumError::Io(ref e)       => Some(e),
+            BerylliumError::Db(ref e)       => Some(e),
             BerylliumError::Decode(ref e)   => Some(e),
             BerylliumError::Encode(ref e)   => Some(e),
             BerylliumError::Hyper(ref e)    => Some(e),
@@ -89,6 +92,7 @@ macro_rules! impl_error {
 
 impl_error!(ImageError => Image);
 impl_error!(io::Error => Io);
+impl_error!(PgError::Error => Db);
 impl_error!(ErrorStack => Openssl);
 impl_error!(DecodeError => Decode);
 impl_error!(EncodeError => Encode);

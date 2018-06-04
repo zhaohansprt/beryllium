@@ -18,6 +18,7 @@ use tokio_core::reactor::Core;
 use tokio_rustls::proto::Server;
 use tokio_proto::TcpServer;
 use types::EventLoopRequest;
+//use cryptobox::Armconn;
 
 pub struct BotService {
     config: ServerConfig,
@@ -54,7 +55,7 @@ impl BotService {
     ///
     /// Note that the certificate and the (RSA) private key should be
     /// in PEM format.
-    pub fn new<P>(auth: String, store_path: P, key_path: P, cert_path: P)
+    pub fn new<P>(auth: String, store_path: String, key_path: P, cert_path: P)
                   -> BerylliumResult<BotService>
         where P: AsRef<Path>
     {

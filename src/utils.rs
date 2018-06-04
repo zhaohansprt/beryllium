@@ -8,19 +8,19 @@ use openssl::symm::{self, Cipher};
 use parking_lot::RwLock;
 use sha2::{Sha256, Digest};
 use std::fmt::Display;
-use std::path::{Path, PathBuf};
+//use std::path::{Path, PathBuf};
 use types::{BerylliumFuture, EncryptData};
 
 pub use uuid_v1::new_v1 as uuid_v1;
 
 lazy_static! {
-    static ref STORE_PATH: RwLock<PathBuf> = RwLock::new(PathBuf::from("."));
+    static ref STORE_PATH: RwLock<String> = RwLock::new(String::new());
     static ref AUTH_TOKEN: RwLock<String> = RwLock::new(String::new());
 }
 
 // NOTE: Setting methods are meant to be called only once (during init)
-pub fn set_store_path<P>(path: P) where P: AsRef<Path> {
-    *STORE_PATH.write() = PathBuf::from(path.as_ref());
+pub fn set_store_path(sql: String)  {
+    *STORE_PATH.write() =sql;
 }
 
 pub fn set_auth_token(token: String) {
@@ -28,7 +28,7 @@ pub fn set_auth_token(token: String) {
 }
 
 #[inline]
-pub fn get_store_path() -> PathBuf {
+pub fn get_store_path() -> String {
     STORE_PATH.read().clone()
 }
 
